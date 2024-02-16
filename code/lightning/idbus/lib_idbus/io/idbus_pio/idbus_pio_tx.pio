@@ -1,0 +1,140 @@
+.program idbus_tx
+
+; PIO ASM code to transmit and receive
+; 1 NOP is 0.5us
+
+; jump to this place after sending a message
+.wrap_target
+
+; -----------------------------------------------------------------------------
+; -- TX code 
+; -----------------------------------------------------------------------------
+
+; Load how many bytes the message has
+PULL
+OUT X 8
+
+; Check if we need to send a BREAK
+PULL
+OUT Y 8
+JMP !Y send_next_byte
+; preamble BREAK send by Tristar
+; 14 us low and 4 us high
+SET PINS 0 [27]
+SET PINS 1 [4]
+
+; send out next bit of the current byte (OSR)
+send_next_byte:
+    PULL
+
+send_next_bit:
+    ; Pull 1 bit from OSR
+    OUT Y 1
+
+    ; if Y is zero we send a zero otherwise a one
+    JMP !Y send_zero
+
+send_one:
+    ; a one has a shorter LOW than HIGH period
+    SET PINS 0 [3]
+    SET PINS 1 [11]
+    JMP send_done
+
+send_zero:
+    ; a zero has a longer LOW than HIGH period
+    SET PINS 0 [13]
+    SET PINS 1 [2]
+    
+send_done:
+    ; if there are bits remaining from the current byte
+    JMP !OSRE send_next_bit
+
+    ; we are done with a byte, send STOP postamble of + 12us
+    NOP [22]
+
+    ; check if we are done with entire message
+    JMP X-- send_next_byte
+
+    ; add NOPS to receive a nice STOP length
+    ;NOP [2]
+    
+    ; Check if we need to send a BREAK
+    PULL
+    OUT Y 8
+    JMP !Y send_msg_done
+    ; postamble BREAK send by Tristar
+    SET PINS 0 [26]
+    SET PINS 1 
+
+send_msg_done:
+    ; signal the driver code that we are done sending out all bytes
+    ; at least as many as we have put into the TX FIFO
+    ; signal is a one in the RX FIFO
+    SET X 1
+    MOV ISR X
+    PUSH NOBLOCK
+
+JMP !Y send_next_byte
+; -----------------------------------------------------------------------------
+; -- RX code 
+; -- (Important for Tristar emulation, to catch message from fast HIFIVE chips)
+; -----------------------------------------------------------------------------
+
+; recv next bit of current byte
+recv_next_bit:
+    ; WAIT for the falling flank
+    ; Then we wait 3us
+    WAIT 0 PIN 0 [5]
+    
+    ; Now read (inverted!!) bit
+    ; Then we wait 4us
+    IN PINS 1 [7]
+    
+    ; Wait until bit is done
+    WAIT 1 PIN 0
+    JMP recv_next_bit
+
+; we are done with sending and receiving the bytes
+; jump back to the .wrap_target label
+.wrap
+
+% c-sdk {
+static inline void idbus_tx_program_init(idbus_pio_t* inst) {
+    // get the default configuration
+    pio_sm_config c = idbus_tx_program_get_default_config(inst->offset);
+
+    // Map the state machine's SET pin group to one pin, namely the `pin`
+    sm_config_set_set_pins(&c, inst->pin, 1);
+    // Map the state machine's IN pin group to one pin, namely the `pin`
+    sm_config_set_in_pins(&c, inst->pin);
+    
+    // Modify the ISR/OSR properly
+    // we need to set the word size to 8 bits, otherwise !OSRE does not work
+    sm_config_set_out_shift(&c, true, false, 8);
+    sm_config_set_in_shift(&c, false, true, 8);
+
+    // Set the inital value for the PINS
+    pio_sm_set_pins_with_mask(inst->pio, inst->sm, 1u << inst->pin, 1u << inst->pin);
+    // Set the PINS direction to output at the PIO
+    pio_sm_set_pindirs_with_mask(inst->pio, inst->sm, 1u << inst->pin, 1u << inst->pin);
+
+    // Set this pin's GPIO function (connect PIO to the pad)
+    pio_gpio_init(inst->pio, inst->pin);
+
+    // Set the clock divider properly
+    sm_config_set_clkdiv(&c, inst->clkdiv);
+
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(inst->pio, inst->sm, inst->offset, &c);
+    
+    // Set the state machine running
+    pio_sm_set_enabled(inst->pio, inst->sm, true);
+
+    // Let the capacitors of the HiFive chip get some load
+    // otherwise he will not be able to respond !!!
+    if (TRISTAR == inst->chip)
+    {
+        sleep_ms(1);
+    }
+}
+%}

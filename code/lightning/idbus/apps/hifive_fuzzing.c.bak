@@ -1,0 +1,144 @@
+/**********************************************************************
+ *
+ * Filename:    hifive_fuzzing.c
+ *
+ * Description: Simple example, how to emulate the Apple TRISTAR chip
+ *
+ **********************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <pico/stdlib.h>
+#include "util.h"
+#include "idbus_core.h"
+#include "idbus_pio.h"
+#include "idbus_msg.h"
+
+/*
+ * Define the PIN number used for the IDBUS communication
+ * Please ensure, that the breakout board ID pin is connected to this
+ * GPIO pin -> GPIO3 in this case
+ */
+#define IDBUS_PIN 2
+
+/*
+ * Define the mode, which should be used by the idbus_pio lib
+ * This value will be passed to the open_idbus_pio function
+ */
+#define IDBUS_MODE TRISTAR
+
+/*
+ * Define a static idbus_pio read and write buffer
+ * The read_buffer will be used to store the read idbus message
+ * The write_buffer is a pointer, showing to the current static defined message from idbus_msg.h
+ */
+static uint8_t read_buffer_data[IDBUS_PIO_DATA_BUFFER_SIZE];
+static idbus_msg_t read_buffer = {.header = 0, .data_ptr = (uint8_t *)&read_buffer_data, .data_len = IDBUS_PIO_DATA_BUFFER_SIZE, .crc = 0};
+static idbus_msg_t *write_buffer;
+
+static int fd, err = 0;
+static int charging_counter = 1;
+void map_response()
+{
+    switch (read_buffer.header)
+    {
+    case 0x75:
+        write_buffer = &msg_70;
+        break;
+    case 0x71:
+        if (charging_counter < 2)
+        {
+            write_buffer = &msg_70;
+            charging_counter++;
+        }
+        else if (charging_counter == 2)
+        {
+            msg_70_buf[0] = 0x80;
+            msg_70.crc = 0x12;
+            charging_counter++;
+        }
+        else
+        {
+            write_buffer = &msg_76;
+        }
+        break;
+    case 0x77:
+        write_buffer = &msg_78;
+        break;
+    case 0x79:
+        write_buffer = &msg_7A;
+        break;
+    case 0x7B:
+        write_buffer = &msg_72;
+        break;
+    case 0x73:
+        write_buffer = &msg_84;
+        printf("!!!!!! Handshake with Apple accessory done !!!!!!\n");
+        printf("Close idbus_pio returned: %d\n", close_idbus_pio(fd));
+        ASSERT;
+        break;
+    default:
+        printf("Some unexpected response header occurred");
+        idbus_print_msg(&read_buffer);
+        break;
+    }
+}
+
+int main()
+{
+    // board initialization
+    stdio_init_all();
+    sleep_ms(5000);
+
+    // ------------------------------------------------------------------------
+    // open a new idbus instance (file descriptor)
+    err = open_idbus_pio(&fd, IDBUS_MODE, IDBUS_PIN);
+    if (IDBUS_PIO_OK != err)
+    {
+        printf("Failed to open idbus_pio fd with error code: %d\n", fd);
+        ASSERT;
+    }
+    printf("Successfully opened idbus_pio fd with id: %d\n", fd);
+
+    // ------------------------------------------------------------------------
+    // start handling the IDBUS messages
+    // initiate the first request
+    write_buffer = &msg_74;
+
+    while (1)
+    {
+        // provide some time between each request
+        sleep_ms(10);
+
+        //------------------------------------------------------------------------
+        // write idbus message
+        err = write_idbus_pio(fd, write_buffer);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to write idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        printf("Successfully written idbus message: ");
+        idbus_print_msg(write_buffer);
+
+        // ------------------------------------------------------------------------
+        // read idbus message
+        err = read_idbus_pio(fd, &read_buffer);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to read idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        map_response();
+
+        // idbus_msg_t msg = {0};
+        // msg.header = 0x72;
+        // msg.data_len = 0;
+        // msg.data_ptr = NULL;
+        // msg.crc = 0x71;
+        // write_idbus_pio(fd, &msg);
+
+        // sleep some time to relax the HIFIVE chip
+        sleep_ms(1);
+    }
+}

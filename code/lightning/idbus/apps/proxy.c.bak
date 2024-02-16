@@ -1,0 +1,109 @@
+/**********************************************************************
+ *
+ * Filename:    tristar.c
+ *
+ * Description: Simple example, how to emulate the Apple TRISTAR chip
+ *              This application leverages the idbus_pio library
+ *              directly, without the idbus_core abstraction layer
+ *
+ **********************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include "pico/stdlib.h"
+
+#include "util.h"
+#include "idbus_pio.h"
+#include "idbus_core.h"
+
+/*
+ * Define the PIN number used for the IDBUS communication
+ * Please ensure, that the breakout board ID pin is connected to this
+ * GPIO pin -> GPIO3 in this case
+ */
+#define TRISTAR_PIN 2
+#define HIFIVE_PIN 3
+
+static uint8_t running, has_response = 0;
+static int fd_hifive, fd_tristar, err;
+
+static uint8_t tristar_data[IDBUS_PIO_DATA_BUFFER_SIZE];
+static idbus_msg_t tristar_msg = {.header = 0, .data_ptr = (uint8_t *)&tristar_data, .data_len = IDBUS_PIO_DATA_BUFFER_SIZE, .crc = 0};
+static uint8_t tristar_cur_header = 0x00;
+
+static uint8_t hifive_data[IDBUS_PIO_DATA_BUFFER_SIZE];
+static idbus_msg_t hifive_msg = {.header = 0, .data_ptr = (uint8_t *)&hifive_data, .data_len = IDBUS_PIO_DATA_BUFFER_SIZE, .crc = 0};
+
+void secure_hifive_response(idbus_msg_t *unsecure)
+{
+    return;
+}
+
+int main()
+{
+    // board initialization
+    stdio_init_all();
+    sleep_ms(5000);
+
+    printf("Started IDBUS proxy example application\n");
+
+    // initialize stuff
+    running = 1;
+    err = open_idbus_pio(&fd_hifive, HIFIVE, HIFIVE_PIN);
+    err |= open_idbus_pio(&fd_tristar, TRISTAR, TRISTAR_PIN);
+    if (IDBUS_PIO_OK != err)
+    {
+        printf("Failed to open either HIFIVE or Tristar idbus_pio instance\n");
+        ASSERT;
+    }
+    printf("Successfully opened idbus_pio fd for Tristar: %d and Hifive: %d\n", fd_tristar, fd_hifive);
+
+    while (running)
+    {
+        // read the original Tristar request from the Apple device
+        err = read_idbus_pio(fd_hifive, &tristar_msg);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to read Tristar request from Apple device\n");
+            ASSERT;
+        }
+
+        // if we do not have the answer yet, let's ask for it
+        if (tristar_cur_header != tristar_msg.header)
+        {
+            tristar_cur_header = tristar_msg.header;
+            has_response = 1;
+
+            // forward to original Tristar request to the HIFIVE and read save the response
+            err = write_idbus_pio(fd_tristar, &tristar_msg);
+            if (IDBUS_PIO_OK != err)
+            {
+                printf("Failed to send Tristar request to Lightning accessory\n");
+                ASSERT;
+            }
+            err = read_idbus_pio(fd_tristar, &hifive_msg);
+            if (IDBUS_PIO_TIMEOUT == err)
+            {
+                has_response = 0;
+            }
+            else if (IDBUS_PIO_OK != err)
+            {
+                printf("Failed to read Tristar response from Lightning accessory\n");
+                ASSERT;
+            }
+
+            // now, let's make the response secure
+            secure_hifive_response(&hifive_msg);
+        }
+
+        // reply secured response from Lightning accessory to Apple device
+        // #TODO: add a check if ~2.2ms passed, if so, there is no need to send because
+        // Tristar will ignore it anyway
+        if (has_response)
+        {
+            err = write_idbus_pio(fd_hifive, &hifive_msg);
+        }
+    }
+
+    ASSERT;
+}

@@ -1,0 +1,44 @@
+# Copyright (c) 2019-2020 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+
+config USB_NERO_STACK_SIZE
+	int "Define the Stack size for of the Nero driver thread"
+	default 2048
+
+config USB_NERO_BATCH_SIZE
+	int "Define the batch size in bytes after which the Nero module will block the USB stack"
+	default 1024
+	help
+		This value should be a multiple of the USB MPS value, and we recommend to use
+		1024 in combination with the LittleFS and 4096 for FatFS dumping.
+
+
+config USB_NERO_DUMP_H264
+	bool "Option to enable storing the requested H.264 frame to disk"
+	default y
+	help
+		If enable, the Nero USB driver will store all the received
+		H.264 frames to the specified storage device.
+
+config USB_NERO_DUMP_SIZE
+	int "Define how many MB of video frames should be dump before the driver stops"
+	default 10
+	depends on USB_NERO_DUMP_H264
+	help
+		Define in MB how large the file on the LittleFS files system should be.
+		This value is not allowed to exceed the overall partition size.
+
+choice
+	prompt "Storage and file system type used by Nero module"
+	default USB_NERO_STORAGE_FLASH
+	depends on USB_NERO_DUMP_H264
+
+config USB_NERO_STORAGE_FLASH
+	bool "Use flash memory to store frames and USB MSC to retrieve"
+
+config USB_NERO_STORAGE_SDCARD
+	bool "Use SDCARD to store frames"
+
+endchoice
+
+source "Kconfig.zephyr"

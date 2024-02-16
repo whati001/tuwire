@@ -1,0 +1,277 @@
+/**********************************************************************
+ *
+ * Filename:    Copycat.c
+ *
+ * Description: Simple example, how to emulate the Apple TRISTAR chip
+ *              and HIFIVE together
+ *              This application leverages the idbus_pio library
+ *              directly, without the idbus_core abstraction layer
+ *
+ **********************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include "pico/stdlib.h"
+
+#include "util.h"
+#include "idbus_core.h"
+#include "idbus_pio.h"
+#include "idbus_msg.h"
+
+/*
+ * Define the PIN number used for the IDBUS communication
+ * Please ensure, that the breakout board ID pin is connected to this
+ * GPIO pin -> GPIO3 in this case
+ */
+#define IDBUS_TRISTAR_PIN 2
+#define IDBUS_HIFIVE_PIN 3
+
+/*
+ * Define the amount of message this application is capable of holding
+ * And get some space for storing them.
+ */
+#define IDBUS_MSG_COUNT 20
+static uint8_t msg_len = 0;
+static idbus_msg_t msgs[IDBUS_MSG_COUNT];
+static uint16_t msg_data_len = 0;
+static uint8_t msgs_data[IDBUS_MSG_COUNT * IDBUS_PIO_DATA_BUFFER_SIZE];
+
+/*
+ * Define a static idbus_pio read and write buffer
+ * The read_buffer will be used to store the read idbus message
+ * The write_buffer is a pointer, showing to the current static defined message from idbus_msg.h
+ */
+static uint8_t read_buffer_data[IDBUS_PIO_DATA_BUFFER_SIZE];
+static idbus_msg_t read_buffer = {.header = 0, .data_ptr = (uint8_t *)&read_buffer_data, .data_len = IDBUS_PIO_DATA_BUFFER_SIZE, .crc = 0};
+static idbus_msg_t *write_buffer;
+
+static int fd, err = 0;
+static uint8_t running = 0;
+/*
+ * Emulate Tristar and request all the handshake messages and store them into msgs
+ */
+void map_request()
+{
+    switch (read_buffer.header)
+    {
+    case 0x75:
+        write_buffer = &msg_70;
+        break;
+    case 0x71:
+        write_buffer = &msg_76;
+        break;
+    case 0x77:
+        write_buffer = &msg_78;
+        break;
+    case 0x79:
+        write_buffer = &msg_7A;
+        break;
+    case 0x7B:
+        write_buffer = &msg_72;
+        break;
+    case 0x73:
+        printf("!!!!!! Handshake with iPhone done !!!!!!\n");
+        running = 0;
+        break;
+    default:
+        printf("Some unexpected response header occurred");
+        idbus_print_msg(&read_buffer);
+        break;
+    }
+}
+
+void emulate_tristar()
+{
+    //------------------------------------------------------------------------
+    // initiate the write_buffer with 0x74 request
+    running = 1;
+    write_buffer = &msg_74;
+
+    // open a idbus_pio fd as TRISTAR chip
+    err = open_idbus_pio(&fd, TRISTAR, IDBUS_TRISTAR_PIN);
+    if (IDBUS_PIO_OK != err)
+    {
+        printf("Failed to open idbus_pio fd for TRISTAR chip with error code: %d\n", fd);
+        ASSERT;
+    }
+    printf("Successfully opened idbus_pio fd with id: %d\n", fd);
+
+    while (running)
+    {
+        //------------------------------------------------------------------------
+        // write idbus message
+        err = write_idbus_pio(fd, write_buffer);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to write idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        printf("Successfully written idbus message: ");
+        idbus_print_msg(write_buffer);
+
+        // ------------------------------------------------------------------------
+        // read idbus message
+        err = read_idbus_pio(fd, &read_buffer);
+        if (IDBUS_PIO_TIMEOUT == err)
+        {
+            printf("No Lightning accessory has responded, is it already connected?\n");
+            sleep_ms(1000);
+            continue;
+        }
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to read idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        printf("Successfully received idbus message: ");
+        idbus_print_msg(&read_buffer);
+
+        // store the response in our msg array
+        // TODO: add some logic
+        msgs[msg_len].header = read_buffer.header;
+        msgs[msg_len].data_ptr = (msgs_data + msg_data_len);
+        msgs[msg_len].data_len = read_buffer.data_len;
+        msgs[msg_len].crc = read_buffer.crc;
+        memcpy((msgs_data + msg_data_len), read_buffer.data_ptr, read_buffer.data_len);
+        msg_data_len += read_buffer.data_len;
+        msg_len += 1;
+
+        // update the request
+        map_request();
+
+        // sleep to give the HIFIVE some time
+        sleep_ms(20);
+    }
+
+    // close idbus_pio for TRISTAR
+    err = close_idbus_pio(fd);
+    if (IDBUS_PIO_OK != err)
+    {
+        printf("Failed to close idbus_pio instance with error code: %d\n", err);
+        ASSERT;
+    }
+}
+
+void map_response()
+{
+    uint8_t response_header = 0x00;
+    write_buffer = NULL;
+    switch (read_buffer.header)
+    {
+    case 0x74:
+        response_header = msg_75.header;
+        break;
+    case 0x70:
+        response_header = msg_71.header;
+        break;
+    case 0x76:
+        response_header = msg_77.header;
+        break;
+    case 0x78:
+        response_header = msg_79.header;
+        break;
+    case 0x7A:
+        response_header = msg_7B.header;
+        break;
+    case 0x72:
+        response_header = msg_73.header;
+        break;
+    case 0x84:
+        printf("!!!!!! Handshake with iPhone done !!!!!!\n");
+        running = 0;
+        return;
+
+    default:
+        printf("Some unexpected request header value received:");
+        idbus_print_msg(&read_buffer);
+        ASSERT;
+        break;
+    }
+
+    // let's find the correct header in the msg array
+    // printf("Search for response_header: %x\n", response_header);
+    for (uint8_t idx = 0; idx < msg_len; idx++)
+    {
+        if (msgs[idx].header == response_header)
+        {
+            write_buffer = &msgs[idx];
+            break;
+        }
+    }
+}
+void emulate_hifive()
+{
+    //------------------------------------------------------------------------
+    // initiate the write_buffer with 0x74 request
+    running = 1;
+    write_buffer = NULL;
+
+    // ------------------------------------------------------------------------
+    // open a new idbus instance (file descriptor)
+    err = open_idbus_pio(&fd, HIFIVE, IDBUS_HIFIVE_PIN);
+    if (IDBUS_PIO_OK != err)
+    {
+        printf("Failed to open idbus_pio fd with error code: %d\n", fd);
+        ASSERT;
+    }
+    printf("Successfully opened idbus_pio fd with id: %d\n", fd);
+
+    // ------------------------------------------------------------------------
+    // start handling the IDBUS messages
+    printf("Start to wait for requests send by Tristar\n");
+    while (running)
+    {
+        // ------------------------------------------------------------------------
+        // read idbus message
+        err = read_idbus_pio(fd, &read_buffer);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to read idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        // no need to sleep here, we have only a short time window for the response
+        // the idbus_pio library does not care about timing, the developer is responsible to
+        // write the response in time. So please execute the write asap after the read
+        // furthermore, please consider to compute the CRC checksum and everything else beforehand.
+        printf("Received: ");
+        idbus_print_msg(&read_buffer);
+
+        // ------------------------------------------------------------------------
+        // write idbus message
+        map_response();
+        if (!running)
+        {
+            break;
+        }
+        // write the message to the idbus PHY layer
+        err = write_idbus_pio(fd, write_buffer);
+        if (IDBUS_PIO_OK != err)
+        {
+            printf("Failed to write idbus message with error code: %d\n", err);
+            ASSERT;
+        }
+        printf("Successfully written idbus message: ");
+        idbus_print_msg(write_buffer);
+        // wait some time to not overload the TRISTAR chip
+        sleep_ms(1);
+    }
+}
+
+int main()
+{
+    // board initialization
+    stdio_init_all();
+    sleep_ms(5000);
+
+    printf("Started IDBUS Copycat example application\n");
+
+    // first, let's read all the original message from the HIFIVE chip
+    printf("Please connect the Lightning accessory such as a USB cable\n");
+    emulate_tristar();
+
+    // second, let's write the original messages to TRISTAR chip
+    printf("Please connect iPhone to replay the Lightning accessory messages\n");
+    emulate_hifive();
+
+    ASSERT;
+}

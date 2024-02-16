@@ -1,0 +1,90 @@
+ /*
+  * USB related configuration
+  */
+ &usbotg_fs {
+     status = "disabled";
+ };
+
+ &usbotg_hs {
+     clocks = <&rcc STM32_CLOCK_BUS_AHB1 0x20000000>,
+         <&rcc STM32_SRC_PLL_Q CK48M_SEL(0)>;
+     pinctrl-0 = <&usb_otg_hs_dm_pb14 &usb_otg_hs_dp_pb15>;
+     pinctrl-names = "default";
+     num-bidir-endpoints = <4>;
+     status = "ok";
+ };
+
+
+/*
+ * Flash storage related information
+ * This devicetree config utilizes a fixed flash partition on the
+ * QSPI flash memory
+ * In addition, to retrieve the recording, it defines a
+ * USB Mass Storage Device called msc_disk0
+ */
+/*
+&quadspi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&quadspi_clk_pb2 &quadspi_bk1_ncs_pb6
+                &quadspi_bk1_io0_pc9 &quadspi_bk1_io1_pc10
+                &quadspi_bk1_io2_pe2 &quadspi_bk1_io3_pd13>;
+    flash-id = <1>;
+    status = "okay";
+
+	mx25r512: qspi-nor-flash@0 {
+		compatible = "st,stm32-qspi-nor";
+        reg = <0>;
+        qspi-max-frequency = <108000000>;
+        size = <DT_SIZE_M(512)>;
+        spi-bus-width = <4>;
+        writeoc = "PP_1_4_4";
+        status = "okay";
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+    
+            storage_partition: partition@0 {
+                label = "storage";
+                reg = <0x00000000 DT_SIZE_M(15)>;
+            };
+        };
+	};
+};
+
+
+/ {
+	msc_disk0 {
+		compatible = "zephyr,flash-disk";
+		partition = <&storage_partition>;
+		disk-name = "NAND";
+		cache-size = <4096>;
+	};
+};
+*/
+
+
+/*
+ * SDCard storage related information
+ * This devicetree config utilizes a SDCard connected via SPI
+ */
+&spi1 {
+	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pb4 &spi1_mosi_pb5>;
+	pinctrl-names = "default";
+	status = "okay";
+    clock-frequency = <50000000>;
+
+    cs-gpios = <&gpioa 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+    sdhc0: sdhc@0 {
+        compatible = "zephyr,sdhc-spi-slot";
+        reg = <0>;
+        status = "okay";
+        mmc {
+            compatible = "zephyr,sdmmc-disk";
+            status = "okay";
+        };
+        spi-max-frequency = <50000000>;
+    };
+};

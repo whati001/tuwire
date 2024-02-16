@@ -1,0 +1,64 @@
+.program idbus_rx
+
+; PIO ASM code to receive multiple bytes
+; 1 NOP is 0.5us
+
+PULL
+
+; recv next bit of current byte
+.wrap_target
+recv_next_bit:
+    ; WAIT for the falling flank
+    ; Then we wait 3us
+    WAIT 0 PIN 0 [5]
+    
+    ; Now read (inverted!!) bit
+    ; Then we wait 4us
+    IN PINS 1 [7]
+
+    ; the PIN is now either HIGH -> we have read a bit
+    JMP PIN continue_receive
+    ; or the PIN is still LOW -> we are during a BREAK
+    ; set the interrupt and push something
+    MOV ISR OSR
+    PUSH
+    
+continue_receive:
+    WAIT 1 PIN 0 
+    .wrap
+
+
+% c-sdk {
+static inline void idbus_rx_program_init(idbus_pio_t* inst) {
+    // get the default configuration
+    pio_sm_config c = idbus_rx_program_get_default_config(inst->offset);
+
+    // Configure the SET/OUT/IN pin mappings
+    // define the IN mapping (this allows IN)
+    sm_config_set_in_pins(&c, inst->pin);
+    // define a jump pin (this allows to use JMP PIN asm)
+    sm_config_set_jmp_pin(&c, inst->pin);
+    
+    // Set the PIN to input
+    if (TRISTAR != inst->chip)
+    {
+        pio_sm_set_pindirs_with_mask(inst->pio, inst->sm, 0, 1u << inst->pin);
+    }
+
+    // define the FIFOs, we will use 32 bit, to have a BREAK value
+    // which is longer than 8 bits
+    sm_config_set_in_shift(&c, false, true, 8);
+    // sm_config_set_out_shift(&c, true, false, 32);
+    
+    // Set the clock divider
+    sm_config_set_clkdiv(&c, inst->clkdiv);
+    
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(inst->pio, inst->sm, inst->offset, &c);
+    // Set the state machine running
+    pio_sm_set_enabled(inst->pio, inst->sm, true);
+
+    // register BREAK value -> first value received by TX FIFO
+    pio_sm_put_blocking(inst->pio, inst->sm, IDBUS_PIO_BREAK_MSG);
+}
+%}

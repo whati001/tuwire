@@ -1,0 +1,59 @@
+.program idbus_wake
+
+; PIO ASM code to transmit and receive
+; 1 NOP is 0.5us
+
+; jump to this place after sending a message
+.wrap_target
+
+; -----------------------------------------------------------------------------
+; -- WAKE code 
+; -----------------------------------------------------------------------------
+
+; preamble BREAK send by Tristar
+;SET PINS 0 [26]
+;SET PINS 1 [6]
+
+; pull to low for approximately 24us
+SET PINS 0
+NOP [24]
+NOP [24]
+SET PINS 1
+
+; postamble BREAK send by Tristar
+;SET PINS 0 [26]
+;SET PINS 1 
+
+SET X 1
+MOV ISR X
+PUSH NOBLOCK
+
+done:
+    JMP done
+; we are done with sending and receiving the bytes
+; jump back to the .wrap_target label
+.wrap
+
+% c-sdk {
+static inline void idbus_wake_program_init(idbus_pio_t* inst) {
+    // get the default configuration
+    pio_sm_config c = idbus_tx_program_get_default_config(inst->offset);
+
+    // Map the state machine's SET pin group to one pin, namely the `pin`
+    sm_config_set_set_pins(&c, inst->pin, 1);
+    
+    // Set the inital value for the PINS
+    pio_sm_set_pins_with_mask(inst->pio, inst->sm, 1u << inst->pin, 1u << inst->pin);
+    // Set the PINS direction to output at the PIO
+    pio_sm_set_pindirs_with_mask(inst->pio, inst->sm, 1u << inst->pin, 1u << inst->pin);
+
+    // Set the clock divider properly
+    sm_config_set_clkdiv(&c, inst->clkdiv);
+
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(inst->pio, inst->sm, inst->offset, &c);
+    
+    // Set the state machine running
+    pio_sm_set_enabled(inst->pio, inst->sm, true);
+}
+%}
