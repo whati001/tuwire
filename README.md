@@ -29,9 +29,6 @@ Please find here some demonstration videos uploaded to YouTube.
 [YouTubeLink](https://youtu.be/olzWqD0d64o?feature=shared)
 
 ## Code
-Please be patient, I am still waiting for the official OK from the university to be allowed to share my code.
-
-But what can you expect:
 * IDBUS implementation for the Raspberry Pi Pico (POC for Zephyr RTOS)
 * iAP implementation for the Raspberry Pi Pico (POC for Zephyr RTOS)
 * MFI chip communication for the Raspberry Pi Pico (POC for Zephyr RTOS)
